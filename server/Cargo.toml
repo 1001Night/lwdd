@@ -1,0 +1,12 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+tokio.workspace = true
+anyhow.workspace = true
+hickory-server = "0.24"
+hickory-proto = "0.24"
+clap = { version = "4.5", features = ["derive"] }
