@@ -33,29 +33,23 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Linux)
+      - name: Rename binaries (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          mkdir -p release
-          cp target/${{ matrix.target }}/release/client release/ddns-client
-          cp target/${{ matrix.target }}/release/server release/ddns-server
-          tar -czf ${{ matrix.artifact_name }}.tar.gz -C release .
+          cp target/${{ matrix.target }}/release/client lddns-client-linux
+          cp target/${{ matrix.target }}/release/server lddns-server-linux
 
-      - name: Package (Windows)
+      - name: Rename binaries (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          mkdir release
-          cp target/${{ matrix.target }}/release/client.exe release/ddns-client.exe
-          cp target/${{ matrix.target }}/release/server.exe release/ddns-server.exe
-          Compress-Archive -Path release/* -DestinationPath ${{ matrix.artifact_name }}.zip
+          cp target/${{ matrix.target }}/release/client.exe lddns-client-windows.exe
+          cp target/${{ matrix.target }}/release/server.exe lddns-server-windows.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            *.tar.gz
-            *.zip
+          path: lddns-*
 
   release:
     name: Create Release
@@ -71,24 +65,23 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ddns-linux-x64/*.tar.gz
-            ddns-windows-x64/*.zip
+            ddns-linux-x64/lddns-*
+            ddns-windows-x64/lddns-*
           body: |
             ## Dynamic DNS System
 
             ### Linux
             ```bash
-            tar -xzf ddns-linux-x64.tar.gz
-            sudo ./ddns-server
-            ./ddns-client
+            chmod +x lddns-server-linux lddns-client-linux
+            sudo ./lddns-server-linux --subnet 192.168.1
+            ./lddns-client-linux --hostname mypc --subnet 192.168.1
             ```
 
             ### Windows
             ```powershell
-            Expand-Archive ddns-windows-x64.zip
             # Run as Administrator
-            .\ddns-server.exe
-            .\ddns-client.exe
+            .\lddns-server-windows.exe --subnet 192.168.1
+            .\lddns-client-windows.exe --hostname mypc --subnet 192.168.1
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
