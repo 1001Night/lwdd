@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: ddns-linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: ddns-windows-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/client release/ddns-client
+          cp target/${{ matrix.target }}/release/server release/ddns-server
+          tar -czf ${{ matrix.artifact_name }}.tar.gz -C release .
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir release
+          cp target/${{ matrix.target }}/release/client.exe release/ddns-client.exe
+          cp target/${{ matrix.target }}/release/server.exe release/ddns-server.exe
+          Compress-Archive -Path release/* -DestinationPath ${{ matrix.artifact_name }}.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ddns-linux-x64/*.tar.gz
+            ddns-windows-x64/*.zip
+          body: |
+            ## Dynamic DNS System
+
+            ### Linux
+            ```bash
+            tar -xzf ddns-linux-x64.tar.gz
+            sudo ./ddns-server
+            ./ddns-client
+            ```
+
+            ### Windows
+            ```powershell
+            Expand-Archive ddns-windows-x64.zip
+            # Run as Administrator
+            .\ddns-server.exe
+            .\ddns-client.exe
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

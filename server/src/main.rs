@@ -20,6 +20,9 @@ struct Args {
 
     #[arg(short, long, help = "Domain suffix for DNS (e.g., local)")]
     domain: Option<String>,
+
+    #[arg(short, long, default_value_t = DNS_PORT, help = "DNS server port (default: 53)")]
+    port: u16,
 }
 
 #[derive(Clone)]
@@ -170,12 +173,12 @@ impl DynamicDnsHandler {
     }
 }
 
-async fn dns_server(registry: DnsRegistry, domain_suffix: String) -> Result<()> {
+async fn dns_server(registry: DnsRegistry, domain_suffix: String, port: u16) -> Result<()> {
     use hickory_proto::op::{MessageType, OpCode, ResponseCode};
     use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 
-    let socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", DNS_PORT)).await?);
-    println!("DNS сервер запущен на порту {}", DNS_PORT);
+    let socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", port)).await?);
+    println!("DNS сервер запущен на порту {}", port);
 
     let handler = Arc::new(DynamicDnsHandler {
         registry,
@@ -229,12 +232,20 @@ fn get_local_subnet() -> String {
 
     #[cfg(unix)]
     {
-        if let Ok(output) = Command::new("hostname").arg("-I").output() {
-            let ips = String::from_utf8_lossy(&output.stdout);
-            if let Some(ip) = ips.split_whitespace().next() {
-                if let Ok(addr) = ip.parse::<Ipv4Addr>() {
-                    let octets = addr.octets();
-                    return format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+        if let Ok(output) = Command::new("ip").args(&["-4", "addr", "show"]).output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.contains("inet ") && !line.contains("127.0.0.1") {
+                    if let Some(ip_part) = line.split_whitespace().nth(1) {
+                        if let Some(ip_str) = ip_part.split('/').next() {
+                            if let Ok(addr) = ip_str.parse::<Ipv4Addr>() {
+                                let octets = addr.octets();
+                                if octets[0] != 172 && octets[0] != 10 || (octets[0] == 10 && octets[1] < 100) {
+                                    return format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -249,11 +260,13 @@ async fn main() -> Result<()> {
 
     let registry: DnsRegistry = Arc::new(RwLock::new(HashMap::new()));
     let domain_suffix = args.domain.unwrap_or_else(|| "local".to_string());
+    let dns_port = args.port;
 
     let subnet = args.subnet.unwrap_or_else(|| get_local_subnet());
 
     println!("Dynamic DNS Server");
     println!("Домен: .{}", domain_suffix);
+    println!("DNS порт: {}", dns_port);
     println!("Подсеть: {}.0/24", subnet);
 
     let registry_clone = registry.clone();
@@ -273,7 +286,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    dns_server(registry, domain_suffix).await?;
+    dns_server(registry, domain_suffix, dns_port).await?;
 
     Ok(())
 }

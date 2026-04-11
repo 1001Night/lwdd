@@ -69,7 +69,30 @@ async fn send_discovery(stream: &mut TcpStream) -> Result<()> {
     }
 }
 
-async fn get_local_ip() -> Result<IpAddr> {
+async fn get_local_ip(subnet: Option<&str>) -> Result<IpAddr> {
+    if let Some(subnet) = subnet {
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            if let Ok(output) = Command::new("ip").args(&["-4", "addr", "show"]).output() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    if line.contains("inet ") && !line.contains("127.0.0.1") {
+                        if let Some(ip_part) = line.split_whitespace().nth(1) {
+                            if let Some(ip_str) = ip_part.split('/').next() {
+                                if ip_str.starts_with(subnet) {
+                                    if let Ok(addr) = ip_str.parse::<IpAddr>() {
+                                        return Ok(addr);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
     socket.connect("8.8.8.8:80").await?;
     let addr = socket.local_addr()?;
@@ -80,14 +103,28 @@ fn get_hostname() -> Result<String> {
     #[cfg(unix)]
     {
         use std::process::Command;
-        let output = Command::new("hostname").output()?;
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        if let Ok(output) = Command::new("hostnamectl").arg("hostname").output() {
+            let hostname = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !hostname.is_empty() {
+                return Ok(hostname);
+            }
+        }
+        if let Ok(hostname) = std::fs::read_to_string("/etc/hostname") {
+            let hostname = hostname.trim().to_string();
+            if !hostname.is_empty() {
+                return Ok(hostname);
+            }
+        }
     }
 
     #[cfg(windows)]
     {
-        Ok(std::env::var("COMPUTERNAME")?)
+        if let Ok(name) = std::env::var("COMPUTERNAME") {
+            return Ok(name);
+        }
     }
+
+    anyhow::bail!("Cannot get hostname")
 }
 
 async fn heartbeat_loop(server_addr: SocketAddr, hostname: String, ip: IpAddr) -> Result<()> {
@@ -133,7 +170,8 @@ async fn main() -> Result<()> {
         get_hostname().unwrap_or_else(|_| "unknown".to_string())
     });
 
-    let ip = get_local_ip().await?;
+    let subnet_ref = args.subnet.as_deref();
+    let ip = get_local_ip(subnet_ref).await?;
 
     let subnet = args.subnet.unwrap_or_else(|| {
         if let IpAddr::V4(ipv4) = ip {
