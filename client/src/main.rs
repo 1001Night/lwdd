@@ -144,7 +144,10 @@ async fn heartbeat_loop(server_addr: SocketAddr, hostname: String, ip: IpAddr) -
 }
 
 async fn send_heartbeat(server_addr: SocketAddr, hostname: &str, ip: IpAddr) -> Result<()> {
-    let mut stream = TcpStream::connect(server_addr).await?;
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(5),
+        TcpStream::connect(server_addr)
+    ).await??;
 
     let msg = Message::Heartbeat {
         hostname: hostname.to_string(),
@@ -152,17 +155,19 @@ async fn send_heartbeat(server_addr: SocketAddr, hostname: &str, ip: IpAddr) -> 
     };
     let bytes = msg.to_bytes()?;
 
-    stream.write_u32(bytes.len() as u32).await?;
-    stream.write_all(&bytes).await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        stream.write_u32(bytes.len() as u32).await?;
+        stream.write_all(&bytes).await?;
 
-    let len = stream.read_u32().await?;
-    let mut buf = vec![0u8; len as usize];
-    stream.read_exact(&mut buf).await?;
+        let len = stream.read_u32().await?;
+        let mut buf = vec![0u8; len as usize];
+        stream.read_exact(&mut buf).await?;
 
-    match Message::from_bytes(&buf)? {
-        Message::HeartbeatAck => Ok(()),
-        _ => anyhow::bail!("Неожиданный ответ на heartbeat"),
-    }
+        match Message::from_bytes(&buf)? {
+            Message::HeartbeatAck => Ok(()),
+            _ => anyhow::bail!("Неожиданный ответ на heartbeat"),
+        }
+    }).await?
 }
 
 #[tokio::main]
