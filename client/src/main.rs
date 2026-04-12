@@ -16,6 +16,9 @@ struct Args {
 
     #[arg(short, long, help = "Subnet to scan (e.g., 192.168.0)")]
     subnet: Option<String>,
+
+    #[arg(long, help = "Server IP address (skip subnet scan)")]
+    server: Option<String>,
 }
 
 async fn scan_subnet(subnet: &str) -> Result<SocketAddr> {
@@ -29,7 +32,7 @@ async fn scan_subnet(subnet: &str) -> Result<SocketAddr> {
             let addr = format!("{}:{}", ip, DISCOVERY_PORT);
             if let Ok(addr) = addr.parse::<SocketAddr>() {
                 if let Ok(Ok(mut stream)) = tokio::time::timeout(
-                    Duration::from_millis(100),
+                    Duration::from_millis(1000),
                     TcpStream::connect(addr)
                 ).await {
                     if let Ok(()) = send_discovery(&mut stream).await {
@@ -182,7 +185,11 @@ async fn main() -> Result<()> {
         }
     });
 
-    let server_addr = scan_subnet(&subnet).await?;
+    let server_addr = if let Some(server_ip) = args.server {
+        format!("{}:{}", server_ip, DISCOVERY_PORT).parse()?
+    } else {
+        scan_subnet(&subnet).await?
+    };
 
     println!("Подключено к серверу: {}", server_addr);
     println!("Hostname: {}", hostname);
