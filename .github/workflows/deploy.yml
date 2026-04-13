@@ -37,6 +37,13 @@ jobs:
             if [ -f /usr/local/bin/lddns-server ]; then
               sudo systemctl stop lddns-server || true
             fi
+
+            if sudo lsof -i :53 > /dev/null 2>&1; then
+              echo "Port 53 is occupied. Stopping systemd-resolved..."
+              sudo systemctl stop systemd-resolved
+              sudo systemctl disable systemd-resolved
+            fi
+
             sudo mv /tmp/lddns-server /usr/local/bin/lddns-server
             sudo chmod +x /usr/local/bin/lddns-server
 
