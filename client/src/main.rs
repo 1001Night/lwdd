@@ -19,6 +19,66 @@ struct Args {
 
     #[arg(long, help = "Server IP address (skip subnet scan)")]
     server: Option<String>,
+
+    #[arg(long, help = "Config file path")]
+    config: Option<String>,
+}
+
+#[derive(Debug)]
+struct Config {
+    hostname: String,
+    server: Option<String>,
+    subnet: Option<String>,
+}
+
+impl Config {
+    fn load(path: Option<&str>) -> Result<Self> {
+        let config_path = path.unwrap_or_else(|| {
+            #[cfg(unix)]
+            { "/etc/lddns/client.conf" }
+            #[cfg(windows)]
+            { "C:\\ProgramData\\LDDNS\\client.conf" }
+        });
+
+        if let Ok(content) = std::fs::read_to_string(config_path) {
+            let mut hostname = None;
+            let mut server = None;
+            let mut subnet = None;
+
+            for line in content.lines() {
+                if let Some((key, value)) = line.split_once('=') {
+                    match key.trim() {
+                        "HOSTNAME" => hostname = Some(value.trim().to_string()),
+                        "SERVER" => {
+                            let val = value.trim();
+                            if val != "auto" {
+                                server = Some(val.to_string());
+                            }
+                        }
+                        "SUBNET" => {
+                            let val = value.trim();
+                            if val != "auto" {
+                                subnet = Some(val.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            Ok(Config {
+                hostname: hostname.unwrap_or_else(|| get_hostname().unwrap_or_else(|_| "unknown".to_string())),
+                server,
+                subnet,
+            })
+        } else {
+            Ok(Config {
+                hostname: get_hostname().unwrap_or_else(|_| "unknown".to_string()),
+                server: None,
+                subnet: None,
+            })
+        }
+    }
 }
 
 async fn scan_subnet(subnet: &str) -> Result<SocketAddr> {
@@ -173,15 +233,20 @@ async fn send_heartbeat(server_addr: SocketAddr, hostname: &str, ip: IpAddr) -> 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-
-    let hostname = args.hostname.unwrap_or_else(|| {
-        get_hostname().unwrap_or_else(|_| "unknown".to_string())
+    let config = Config::load(args.config.as_deref()).unwrap_or_else(|_| Config {
+        hostname: "unknown".to_string(),
+        server: None,
+        subnet: None,
     });
 
-    let subnet_ref = args.subnet.as_deref();
+    let hostname = args.hostname.or(Some(config.hostname)).unwrap();
+    let server_ip = args.server.or(config.server);
+    let subnet_arg = args.subnet.or(config.subnet);
+
+    let subnet_ref = subnet_arg.as_deref();
     let ip = get_local_ip(subnet_ref).await?;
 
-    let subnet = args.subnet.unwrap_or_else(|| {
+    let subnet = subnet_arg.unwrap_or_else(|| {
         if let IpAddr::V4(ipv4) = ip {
             let octets = ipv4.octets();
             format!("{}.{}.{}", octets[0], octets[1], octets[2])
@@ -190,7 +255,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let server_addr = if let Some(server_ip) = args.server {
+    let server_addr = if let Some(server_ip) = server_ip {
         format!("{}:{}", server_ip, DISCOVERY_PORT).parse()?
     } else {
         scan_subnet(&subnet).await?

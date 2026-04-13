@@ -1,7 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use common::{Message, DISCOVERY_PORT, DNS_PORT};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
+use hickory_resolver::TokioAsyncResolver;
+use hickory_resolver::config::{ResolverConfig, ResolverOpts, NameServerConfig, Protocol};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -138,6 +140,7 @@ async fn cleanup_stale_records(registry: DnsRegistry) {
 struct DynamicDnsHandler {
     registry: DnsRegistry,
     domain_suffix: String,
+    resolver: TokioAsyncResolver,
 }
 
 impl DynamicDnsHandler {
@@ -169,6 +172,25 @@ impl DynamicDnsHandler {
             }
         }
 
+        drop(registry);
+
+        if let Ok(response) = self.resolver.lookup_ip(name_str).await {
+            let mut records = Vec::new();
+            for ip in response.iter() {
+                if let IpAddr::V4(ipv4) = ip {
+                    let mut dns_record = Record::new();
+                    dns_record.set_name(name.clone());
+                    dns_record.set_rr_type(RecordType::A);
+                    dns_record.set_ttl(300);
+                    dns_record.set_data(Some(RData::A(ipv4.into())));
+                    records.push(dns_record);
+                }
+            }
+            if !records.is_empty() {
+                return Some(records);
+            }
+        }
+
         None
     }
 }
@@ -180,9 +202,23 @@ async fn dns_server(registry: DnsRegistry, domain_suffix: String, port: u16) -> 
     let socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", port)).await?);
     println!("DNS сервер запущен на порту {}", port);
 
+    let mut resolver_config = ResolverConfig::new();
+    for ip in ["94.140.14.15", "94.140.14.16", "1.1.1.1", "1.0.0.1"] {
+        resolver_config.add_name_server(NameServerConfig {
+            socket_addr: SocketAddr::new(ip.parse().unwrap(), 53),
+            protocol: Protocol::Udp,
+            tls_dns_name: None,
+            trust_negative_responses: true,
+            bind_addr: None,
+        });
+    }
+
+    let resolver = TokioAsyncResolver::tokio(resolver_config, ResolverOpts::default());
+
     let handler = Arc::new(DynamicDnsHandler {
         registry,
         domain_suffix,
+        resolver,
     });
 
     let mut buf = vec![0u8; 512];

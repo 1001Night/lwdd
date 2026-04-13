@@ -9,4 +9,5 @@ tokio.workspace = true
 anyhow.workspace = true
 hickory-server = "0.24"
 hickory-proto = "0.24"
+hickory-resolver = "0.24"
 clap = { version = "4.5", features = ["derive"] }
