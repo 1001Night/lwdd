@@ -83,5 +83,10 @@ jobs:
             .\lddns-server-windows.exe --subnet 192.168.1
             .\lddns-client-windows.exe --hostname mypc --subnet 192.168.1
             ```
+
+            ### List domains
+            ```bash
+            ./lddns-client-linux --list --server SERVER_IP
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
