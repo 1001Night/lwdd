@@ -12,6 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::RwLock;
 use tokio::time;
+use axum::{Router, Json, routing::get};
+use serde_json::json;
 
 #[derive(Parser, Debug)]
 #[command(name = "ddns-server")]
@@ -288,6 +290,42 @@ fn get_local_subnet() -> String {
     "192.168.0".to_string()
 }
 
+async fn web_server(registry: DnsRegistry, domain_suffix: String) -> Result<()> {
+    let app = Router::new()
+        .route("/list", get({
+            let registry = registry.clone();
+            let domain_suffix = domain_suffix.clone();
+            move || list_domains(registry, domain_suffix)
+        }));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:61001").await?;
+    println!("Web сервер запущен на порту 61001");
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn list_domains(registry: DnsRegistry, domain_suffix: String) -> Json<serde_json::Value> {
+    let registry = registry.read().await;
+
+    let domains: Vec<serde_json::Value> = registry
+        .iter()
+        .map(|(hostname, record)| {
+            json!({
+                "hostname": hostname,
+                "domain": format!("{}.{}", hostname, domain_suffix),
+                "ip": record.ip.to_string(),
+                "last_seen": record.last_seen.elapsed().unwrap_or(Duration::from_secs(0)).as_secs()
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "domains": domains,
+        "count": domains.len()
+    }))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -317,6 +355,14 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         if let Err(e) = tcp_server(registry_clone).await {
             eprintln!("Ошибка TCP сервера: {}", e);
+        }
+    });
+
+    let registry_clone = registry.clone();
+    let domain_suffix_clone = domain_suffix.clone();
+    tokio::spawn(async move {
+        if let Err(e) = web_server(registry_clone, domain_suffix_clone).await {
+            eprintln!("Ошибка Web сервера: {}", e);
         }
     });
 

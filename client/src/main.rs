@@ -22,6 +22,9 @@ struct Args {
 
     #[arg(long, help = "Config file path")]
     config: Option<String>,
+
+    #[arg(long, help = "List all registered domains")]
+    list: bool,
 }
 
 #[derive(Debug)]
@@ -265,6 +268,32 @@ async fn send_heartbeat(server_addr: SocketAddr, hostname: &str, ip: IpAddr) -> 
     }).await?
 }
 
+async fn list_domains(server_ip: &str) -> Result<()> {
+    let url = format!("http://{}:61001/list", server_ip);
+    let response = reqwest::get(&url).await?;
+    let data: serde_json::Value = response.json().await?;
+
+    if let Some(domains) = data["domains"].as_array() {
+        println!("Зарегистрированные домены ({}):", data["count"]);
+        println!();
+        for domain in domains {
+            let hostname = domain["hostname"].as_str().unwrap_or("unknown");
+            let full_domain = domain["domain"].as_str().unwrap_or("unknown");
+            let ip = domain["ip"].as_str().unwrap_or("unknown");
+            let last_seen = domain["last_seen"].as_u64().unwrap_or(0);
+
+            println!("  {} ({})", full_domain, hostname);
+            println!("    IP: {}", ip);
+            println!("    Последний heartbeat: {} сек назад", last_seen);
+            println!();
+        }
+    } else {
+        println!("Нет зарегистрированных доменов");
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -295,6 +324,11 @@ async fn main() -> Result<()> {
     } else {
         scan_subnet(&subnet).await?
     };
+
+    if args.list {
+        let server_ip = server_addr.ip().to_string();
+        return list_domains(&server_ip).await;
+    }
 
     println!("Подключено к серверу: {}", server_addr);
     println!("Hostname: {}", hostname);
