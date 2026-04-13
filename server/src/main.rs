@@ -246,10 +246,8 @@ async fn dns_server(registry: DnsRegistry, domain_suffix: String, port: u16) -> 
                         for record in records {
                             response.add_answer(record);
                         }
-                        println!("DNS запрос: {} -> найдено", query.name());
                     } else {
                         response.set_response_code(ResponseCode::NXDomain);
-                        println!("DNS запрос: {} -> не найдено", query.name());
                     }
                 } else {
                     response.set_response_code(ResponseCode::FormErr);
