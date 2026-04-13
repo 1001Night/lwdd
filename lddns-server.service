@@ -1,0 +1,12 @@
+[Unit]
+Description=LDDNS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lddns-server --port 53 --domain local
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

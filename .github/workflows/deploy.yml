@@ -32,6 +32,7 @@ jobs:
       - name: Deploy to server
         run: |
           scp target/release/server user1001@${{ secrets.PUBLIC_SERVER_IP }}:/tmp/lddns-server
+          scp lddns-server.service user1001@${{ secrets.PUBLIC_SERVER_IP }}:/tmp/lddns-server.service
           ssh user1001@${{ secrets.PUBLIC_SERVER_IP }} << 'ENDSSH'
             if [ -f /usr/local/bin/lddns-server ]; then
               sudo systemctl stop lddns-server || true
@@ -40,20 +41,7 @@ jobs:
             sudo chmod +x /usr/local/bin/lddns-server
 
             if [ ! -f /etc/systemd/system/lddns-server.service ]; then
-              sudo bash -c 'cat > /etc/systemd/system/lddns-server.service' << 'ENDSERVICE'
-[Unit]
-Description=LDDNS Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/lddns-server --port 53 --domain local
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-ENDSERVICE
+              sudo mv /tmp/lddns-server.service /etc/systemd/system/lddns-server.service
               sudo systemctl daemon-reload
               sudo systemctl enable lddns-server
             fi
