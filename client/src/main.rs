@@ -25,6 +25,9 @@ struct Args {
 
     #[arg(long, help = "List all registered domains")]
     list: bool,
+
+    #[arg(long, help = "Explicit IP address to register (must exist on network interface)")]
+    ip: Option<String>,
 }
 
 #[derive(Debug)]
@@ -268,6 +271,28 @@ async fn send_heartbeat(server_addr: SocketAddr, hostname: &str, ip: IpAddr) -> 
     }).await?
 }
 
+async fn verify_ip_on_interface(ip_str: &str) -> Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("ip").args(&["-4", "addr", "show"]).output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            return Ok(text.contains(ip_str));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("ipconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            return Ok(text.contains(ip_str));
+        }
+    }
+
+    Ok(false)
+}
+
 async fn list_domains(server_ip: &str) -> Result<()> {
     let url = format!("http://{}:61001/list", server_ip);
     let response = reqwest::get(&url).await?;
@@ -308,7 +333,19 @@ async fn main() -> Result<()> {
     let subnet_arg = args.subnet.or(config.subnet);
 
     let subnet_ref = subnet_arg.as_deref();
-    let ip = get_local_ip(subnet_ref).await?;
+
+    let ip = if let Some(explicit_ip) = args.ip {
+        let parsed_ip: IpAddr = explicit_ip.parse()?;
+
+        if !verify_ip_on_interface(&explicit_ip).await? {
+            anyhow::bail!("IP адрес {} не найден на сетевых интерфейсах", explicit_ip);
+        }
+
+        println!("Используется явно указанный IP: {}", parsed_ip);
+        parsed_ip
+    } else {
+        get_local_ip(subnet_ref).await?
+    };
 
     let subnet = subnet_arg.unwrap_or_else(|| {
         if let IpAddr::V4(ipv4) = ip {
