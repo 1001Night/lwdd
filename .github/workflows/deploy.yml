@@ -47,6 +47,12 @@ jobs:
             fi
 
             sudo systemctl restart lddns-server
+            sleep 2
+            if ! sudo systemctl is-active --quiet lddns-server; then
+              echo "Service failed to start. Logs:"
+              sudo journalctl -u lddns-server -n 50 --no-pager
+              exit 1
+            fi
             sudo systemctl status lddns-server --no-pager
           ENDSSH
 
