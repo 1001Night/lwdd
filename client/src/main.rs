@@ -133,18 +133,56 @@ async fn send_discovery(stream: &mut TcpStream) -> Result<()> {
 }
 
 async fn get_local_ip(subnet: Option<&str>) -> Result<IpAddr> {
-    if let Some(subnet) = subnet {
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-            if let Ok(output) = Command::new("ip").args(&["-4", "addr", "show"]).output() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                for line in text.lines() {
-                    if line.contains("inet ") && !line.contains("127.0.0.1") {
-                        if let Some(ip_part) = line.split_whitespace().nth(1) {
-                            if let Some(ip_str) = ip_part.split('/').next() {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("ip").args(&["-4", "addr", "show"]).output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.contains("inet ") && !line.contains("127.0.0.1") {
+                    if let Some(ip_part) = line.split_whitespace().nth(1) {
+                        if let Some(ip_str) = ip_part.split('/').next() {
+                            if let Ok(addr) = ip_str.parse::<IpAddr>() {
+                                if let Some(subnet) = subnet {
+                                    if ip_str.starts_with(subnet) {
+                                        return Ok(addr);
+                                    }
+                                } else {
+                                    let ip_str_parts: Vec<&str> = ip_str.split('.').collect();
+                                    if ip_str_parts.len() == 4 {
+                                        let first = ip_str_parts[0].parse::<u8>().unwrap_or(0);
+                                        if first == 10 || first == 192 || first == 172 {
+                                            return Ok(addr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("ipconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.contains("IPv4") {
+                    if let Some(ip_str) = line.split(':').nth(1) {
+                        let ip_str = ip_str.trim();
+                        if let Ok(addr) = ip_str.parse::<IpAddr>() {
+                            if let Some(subnet) = subnet {
                                 if ip_str.starts_with(subnet) {
-                                    if let Ok(addr) = ip_str.parse::<IpAddr>() {
+                                    return Ok(addr);
+                                }
+                            } else {
+                                let ip_str_parts: Vec<&str> = ip_str.split('.').collect();
+                                if ip_str_parts.len() == 4 {
+                                    let first = ip_str_parts[0].parse::<u8>().unwrap_or(0);
+                                    if first == 10 || first == 192 || first == 172 {
                                         return Ok(addr);
                                     }
                                 }
@@ -156,10 +194,7 @@ async fn get_local_ip(subnet: Option<&str>) -> Result<IpAddr> {
         }
     }
 
-    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-    socket.connect("8.8.8.8:80").await?;
-    let addr = socket.local_addr()?;
-    Ok(addr.ip())
+    anyhow::bail!("Не удалось найти локальный IP адрес")
 }
 
 fn get_hostname() -> Result<String> {

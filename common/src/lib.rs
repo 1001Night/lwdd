@@ -3,7 +3,7 @@ use std::net::IpAddr;
 
 pub const DISCOVERY_PORT: u16 = 63200;
 pub const DNS_PORT: u16 = 53;
-pub const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+pub const HEARTBEAT_INTERVAL_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
