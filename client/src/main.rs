@@ -28,6 +28,9 @@ struct Args {
 
     #[arg(long, help = "Explicit IP address to register (must exist on network interface)")]
     ip: Option<String>,
+
+    #[arg(short, long, help = "Detached mode (no interactive prompts)")]
+    detached: bool,
 }
 
 #[derive(Debug)]
@@ -35,6 +38,7 @@ struct Config {
     hostname: String,
     server: Option<String>,
     subnet: Option<String>,
+    interface_ip: Option<String>,
 }
 
 impl Config {
@@ -50,6 +54,7 @@ impl Config {
             let mut hostname = None;
             let mut server = None;
             let mut subnet = None;
+            let mut interface_ip = None;
 
             for line in content.lines() {
                 if let Some((key, value)) = line.split_once('=') {
@@ -67,6 +72,12 @@ impl Config {
                                 subnet = Some(val.to_string());
                             }
                         }
+                        "INTERFACE_IP" => {
+                            let val = value.trim();
+                            if !val.is_empty() && val != "auto" {
+                                interface_ip = Some(val.to_string());
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -76,14 +87,36 @@ impl Config {
                 hostname: hostname.unwrap_or_else(|| get_hostname().unwrap_or_else(|_| "unknown".to_string())),
                 server,
                 subnet,
+                interface_ip,
             })
         } else {
             Ok(Config {
                 hostname: get_hostname().unwrap_or_else(|_| "unknown".to_string()),
                 server: None,
                 subnet: None,
+                interface_ip: None,
             })
         }
+    }
+
+    fn save(&self, path: Option<&str>) -> Result<()> {
+        let config_path = path.unwrap_or_else(|| {
+            #[cfg(unix)]
+            { "/etc/lddns/client.conf" }
+            #[cfg(windows)]
+            { "C:\\ProgramData\\LDDNS\\client.conf" }
+        });
+
+        let content = format!(
+            "SERVER={}\nHOSTNAME={}\nSUBNET={}\nENABLED=false\nINTERFACE_IP={}\n",
+            self.server.as_deref().unwrap_or("auto"),
+            self.hostname,
+            self.subnet.as_deref().unwrap_or("auto"),
+            self.interface_ip.as_deref().unwrap_or("auto")
+        );
+
+        std::fs::write(config_path, content)?;
+        Ok(())
     }
 }
 
@@ -271,6 +304,88 @@ async fn send_heartbeat(server_addr: SocketAddr, hostname: &str, ip: IpAddr) -> 
     }).await?
 }
 
+async fn get_network_interfaces() -> Result<Vec<(String, String)>> {
+    let mut interfaces = Vec::new();
+
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("ip").args(&["-4", "addr", "show"]).output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut current_interface = None;
+
+            for line in text.lines() {
+                if !line.starts_with(' ') && line.contains(':') {
+                    if let Some(name) = line.split(':').nth(1) {
+                        current_interface = Some(name.trim().to_string());
+                    }
+                } else if line.contains("inet ") && !line.contains("127.0.0.1") {
+                    if let Some(ip_part) = line.split_whitespace().nth(1) {
+                        if let Some(ip_str) = ip_part.split('/').next() {
+                            if let Some(ref iface) = current_interface {
+                                interfaces.push((iface.clone(), ip_str.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("ipconfig").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut current_interface = None;
+
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !line.starts_with(' ') && line.contains(':') && !line.contains("IPv4") {
+                    current_interface = Some(trimmed.trim_end_matches(':').to_string());
+                } else if trimmed.contains("IPv4") {
+                    if let Some(ip_str) = trimmed.split(':').nth(1) {
+                        let ip_str = ip_str.trim();
+                        if let Some(ref iface) = current_interface {
+                            interfaces.push((iface.clone(), ip_str.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(interfaces)
+}
+
+async fn select_interface_interactive() -> Result<String> {
+    let interfaces = get_network_interfaces().await?;
+
+    if interfaces.is_empty() {
+        anyhow::bail!("Не найдено сетевых интерфейсов");
+    }
+
+    println!("\nДоступные сетевые интерфейсы:");
+    for (i, (name, ip)) in interfaces.iter().enumerate() {
+        println!("  {}. {} - {}", i + 1, name, ip);
+    }
+
+    println!("\nВыберите интерфейс (введите номер): ");
+
+    use std::io::{self, BufRead};
+    let stdin = io::stdin();
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+
+    let choice: usize = line.trim().parse()?;
+
+    if choice == 0 || choice > interfaces.len() {
+        anyhow::bail!("Неверный выбор");
+    }
+
+    Ok(interfaces[choice - 1].1.clone())
+}
+
 async fn verify_ip_on_interface(ip_str: &str) -> Result<bool> {
     #[cfg(unix)]
     {
@@ -322,15 +437,16 @@ async fn list_domains(server_ip: &str) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let config = Config::load(args.config.as_deref()).unwrap_or_else(|_| Config {
+    let mut config = Config::load(args.config.as_deref()).unwrap_or_else(|_| Config {
         hostname: "unknown".to_string(),
         server: None,
         subnet: None,
+        interface_ip: None,
     });
 
-    let hostname = args.hostname.or(Some(config.hostname)).unwrap();
-    let server_ip = args.server.or(config.server);
-    let subnet_arg = args.subnet.or(config.subnet);
+    let hostname = args.hostname.or(Some(config.hostname.clone())).unwrap();
+    let server_ip = args.server.or(config.server.clone());
+    let subnet_arg = args.subnet.or(config.subnet.clone());
 
     let subnet_ref = subnet_arg.as_deref();
 
@@ -343,8 +459,33 @@ async fn main() -> Result<()> {
 
         println!("Используется явно указанный IP: {}", parsed_ip);
         parsed_ip
+    } else if let Some(ref interface_ip) = config.interface_ip {
+        if verify_ip_on_interface(interface_ip).await? {
+            println!("Используется IP из конфига: {}", interface_ip);
+            interface_ip.parse()?
+        } else {
+            if args.detached {
+                anyhow::bail!("IP из конфига {} не найден на интерфейсах. Запустите без -d для выбора нового интерфейса.", interface_ip);
+            }
+
+            println!("IP из конфига {} не найден на интерфейсах.", interface_ip);
+            let selected_ip = select_interface_interactive().await?;
+            config.interface_ip = Some(selected_ip.clone());
+            config.save(args.config.as_deref())?;
+            println!("Новый IP сохранен в конфиг: {}", selected_ip);
+            selected_ip.parse()?
+        }
     } else {
-        get_local_ip(subnet_ref).await?
+        if !args.detached {
+            println!("IP интерфейса не указан в конфиге.");
+            let selected_ip = select_interface_interactive().await?;
+            config.interface_ip = Some(selected_ip.clone());
+            config.save(args.config.as_deref())?;
+            println!("IP сохранен в конфиг: {}", selected_ip);
+            selected_ip.parse()?
+        } else {
+            get_local_ip(subnet_ref).await?
+        }
     };
 
     let subnet = subnet_arg.unwrap_or_else(|| {
