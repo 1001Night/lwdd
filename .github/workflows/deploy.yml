@@ -27,12 +27,12 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 192.144.14.240 >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.PUBLIC_SERVER_IP }} >> ~/.ssh/known_hosts
 
       - name: Deploy to server
         run: |
-          scp target/release/server user1001@192.144.14.240:/tmp/lddns-server
-          ssh user1001@192.144.14.240 << 'EOF'
+          scp target/release/server user1001@${{ secrets.PUBLIC_SERVER_IP }}:/tmp/lddns-server
+          ssh user1001@${{ secrets.PUBLIC_SERVER_IP }} << 'EOF'
             sudo systemctl stop lddns-server || true
             sudo mv /tmp/lddns-server /usr/local/bin/lddns-server
             sudo chmod +x /usr/local/bin/lddns-server
@@ -42,4 +42,4 @@ jobs:
 
       - name: Verify deployment
         run: |
-          ssh user1001@192.144.14.240 'dig @localhost google.com +short'
+          ssh user1001@${{ secrets.PUBLIC_SERVER_IP }} 'dig @localhost google.com +short'
